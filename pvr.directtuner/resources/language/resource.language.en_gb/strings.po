@@ -1,0 +1,78 @@
+# Kodi Media Center language file
+# Addon Name: Direct Tuner PVR
+# Addon id: pvr.directtuner
+msgid ""
+msgstr ""
+"Project-Id-Version: pvr.directtuner\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: en_GB\n"
+
+msgctxt "#30000"
+msgid "General"
+msgstr ""
+
+msgctxt "#30001"
+msgid "Recording (runs only while Kodi is open)"
+msgstr ""
+
+msgctxt "#30002"
+msgid "Recordings folder"
+msgstr ""
+
+msgctxt "#30003"
+msgid "Start recording early (minutes)"
+msgstr ""
+
+msgctxt "#30004"
+msgid "Keep recording after the end (minutes)"
+msgstr ""
+
+msgctxt "#30005"
+msgid "Guide"
+msgstr ""
+
+msgctxt "#30006"
+msgid "XMLTV guide file (optional)"
+msgstr ""
+
+msgctxt "#30007"
+msgid "Live TV"
+msgstr ""
+
+msgctxt "#30008"
+msgid "Timeshift size (GB, 0 turns pausing off)"
+msgstr ""
+
+msgctxt "#30009"
+msgid "Hide copy-protected channels"
+msgstr ""
+
+msgctxt "#30010"
+msgid "Tuner IP address (only if it isn't found)"
+msgstr ""
+
+msgctxt "#30102"
+msgid "Where recordings are saved. If left empty, they go in a Kodi Recordings folder in your Videos folder. Live TV's pause buffer also goes here. Choose a local drive or a network share."
+msgstr ""
+
+msgctxt "#30103"
+msgid "The default for new recordings. Shows often run a little early or late."
+msgstr ""
+
+msgctxt "#30106"
+msgid "The guide comes from the tuner with no setup and covers about 2 days. Choose an XMLTV file to use it instead for every channel it covers."
+msgstr ""
+
+msgctxt "#30108"
+msgid "How much live TV is kept on disk for pausing and rewinding. About 2 GB holds 15 minutes of HD."
+msgstr ""
+
+msgctxt "#30109"
+msgid "Some ATSC 3.0 channels are encrypted and won't play in Kodi."
+msgstr ""
+
+msgctxt "#30110"
+msgid "The tuner is normally found automatically. Enter its address if it's on another subnet."
+msgstr ""
