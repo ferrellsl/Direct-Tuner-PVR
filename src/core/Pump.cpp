@@ -12,11 +12,6 @@
 #include <chrono>
 #include <cstring>
 
-#ifdef _WIN32
-#define Seek64 _fseeki64
-#else
-#define Seek64 fseeko
-#endif
 
 namespace dt
 {
@@ -397,8 +392,7 @@ TimeshiftBuffer::~TimeshiftBuffer()
     std::fclose(m_writer);
   if (m_reader)
     std::fclose(m_reader);
-  std::error_code error;
-  std::filesystem::remove(PathFromUtf8(m_path), error);
+  RemovePath(m_path);
 }
 
 bool TimeshiftBuffer::Open()
@@ -426,7 +420,7 @@ bool TimeshiftBuffer::OnData(const uint8_t* data, size_t size)
   {
     const int64_t offset = (head + static_cast<int64_t>(done)) % m_capacity;
     const size_t count = std::min<size_t>(size - done, static_cast<size_t>(m_capacity - offset));
-    if (Seek64(m_writer, offset, SEEK_SET) != 0 ||
+    if (SeekFile(m_writer, offset, SEEK_SET) != 0 ||
         std::fwrite(data + done, 1, count, m_writer) != count)
     {
       Log(LogLevel::Error, "Can't write the timeshift file (disk full?)");
@@ -477,7 +471,7 @@ int TimeshiftBuffer::Read(uint8_t* buffer, size_t size, int timeoutMs)
       {static_cast<int64_t>(size), m_head - m_read, m_capacity - offset}));
   lock.unlock();
 
-  if (Seek64(m_reader, offset, SEEK_SET) != 0)
+  if (SeekFile(m_reader, offset, SEEK_SET) != 0)
     return -1;
   const size_t got = std::fread(buffer, 1, count, m_reader);
 

@@ -52,7 +52,7 @@ if __name__ == "__main__":
             print("stop", timer["title"], call("PVR.DeleteTimer", {"timerid": timer["timerid"]}).get("result"))
     print("ran", started, "to", time.strftime("%H:%M:%S"))
     time.sleep(5)
-    folder = os.path.expandvars(r"%USERPROFILE%\Videos\Kodi Recordings")
-    for path in glob.glob(folder + r"\*\*.ts"):
+    folder = os.path.join(os.path.expanduser("~"), "Videos", "Kodi Recordings")
+    for path in glob.glob(os.path.join(folder, "*", "*.ts")):
         if os.path.getmtime(path) >= since:
             print(os.path.basename(path), os.path.getsize(path), "packets, lost, bursts at:", lost_packets(path))

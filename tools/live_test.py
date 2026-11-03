@@ -13,6 +13,7 @@ def channels():
     table = {}
     for item in result["result"]["channels"]:
         table["%d.%d" % (item["channelnumber"], item["subchannelnumber"])] = item
+        table.setdefault(item["label"], item)
     return table
 
 

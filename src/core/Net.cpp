@@ -22,7 +22,9 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#if !defined(__ANDROID__) || __ANDROID_API__ >= 24
 #include <ifaddrs.h>
+#endif
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/select.h>
@@ -197,6 +199,9 @@ std::vector<uint32_t> LocalIpv4Addresses()
       addresses.push_back(
           reinterpret_cast<sockaddr_in*>(address->Address.lpSockaddr)->sin_addr.s_addr);
   }
+#elif defined(__ANDROID__) && __ANDROID_API__ < 24
+  // getifaddrs arrived in API 24: one socket on any interface still reaches the local network.
+  addresses.push_back(htonl(INADDR_ANY));
 #else
   ifaddrs* list = nullptr;
   if (getifaddrs(&list) != 0)

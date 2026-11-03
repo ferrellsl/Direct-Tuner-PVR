@@ -298,7 +298,7 @@ static void TestStore(const std::string& folder)
 
   RecordingStore store;
   store.SetFolder(folder + "/rec");
-  std::filesystem::create_directories(PathFromUtf8(store.Folder()));
+  CreateDirectories(store.Folder());
 
   const auto add = [&](const char* title, time_t start, unsigned int rule, const char* status) {
     RecordingInfo info;
@@ -325,7 +325,7 @@ static void TestStore(const std::string& folder)
   CHECK(list[1].id == newest);
   CHECK(list[1].size == 4);
   CHECK(store.Delete(newest));
-  CHECK(!std::filesystem::exists(PathFromUtf8(store.Folder() + "/Show_ One_")));
+  CHECK(!IsDirectory(store.Folder() + "/Show_ One_"));
   uint64_t total = 0;
   uint64_t used = 0;
   CHECK(store.DriveSpace(total, used) && total > 0);
@@ -364,8 +364,8 @@ int main(int argc, char** argv)
   TestGuideMerge();
   TestSeries();
   TestConflicts();
-  TestTimeshift(PathToUtf8(folder));
-  TestStore(PathToUtf8(folder));
+  TestTimeshift(folder.string());
+  TestStore(folder.string());
   for (int i = 1; i < argc; ++i)
     TestRealGuide(argv[i]);
 

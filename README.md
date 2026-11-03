@@ -10,9 +10,20 @@ missed.
 
 ## What you need
 
-- 64-bit Windows.
-- Kodi 21 (Omega). The add-on won't load on other Kodi versions or on Android, Linux or macOS.
+- Kodi 21 (Omega). The add-on won't load on other Kodi versions.
 - An HDHomeRun tuner on your network.
+- One of these:
+
+| Platform | How to get the add-on |
+|---|---|
+| Windows (64-bit) | Included in the [AC-4 build's](https://github.com/ferrellsl/kodi-ac4/releases) installer, or install the zip below into standard Kodi 21 |
+| Linux (x86_64) | Included in the AC-4 build's AppImage |
+| Android and Fire TV | Included in the AC-4 build's APKs (arm64 for most phones, tablets and newer TV boxes; armv7 for Fire TV sticks) |
+| macOS, iOS, other Linux CPUs | Not available |
+
+On Linux and Android, add-ons with compiled code can't be installed from a zip, so the add-on only
+comes inside the AC-4 build there. Wherever it's included, it starts **off**: skip to
+[step 4](#4-if-you-use-another-pvr-add-on) to turn it on under **My add-ons** > **PVR clients**.
 
 ### Which Kodi to use
 
@@ -25,16 +36,12 @@ missed.
 Standard Kodi can't decode AC-4 audio. If you want sound on ATSC 3.0 channels, install the
 [AC-4 build](https://github.com/ferrellsl/kodi-ac4/releases) first.
 
-The AC-4 build's Windows installer, from v21.3-ac4.5 on, already includes this add-on, turned off. If you
-use it, skip steps 1 to 3 below and enable the add-on under **Add-ons > My add-ons > PVR clients > Direct
-Tuner PVR**. Then see step 4 if you use another PVR add-on.
-
 ## Install
 
 ### 1. Download the add-on
 
 Go to the [Releases page](https://github.com/ferrellsl/Direct-Tuner-PVR/releases) and download
-`pvr.directtuner-21.0.0.zip`. Don't unzip it.
+`pvr.directtuner-21.1.0.zip`. Don't unzip it.
 
 ### 2. Allow add-ons from zip files
 
@@ -70,10 +77,13 @@ After a few seconds Kodi shows **Add-on installed**:
 That's all the setup most people need. The add-on finds your tuner by itself and loads the channels and
 guide. Open **TV** on Kodi's main menu to watch.
 
-### 4. If you use another PVR add-on
+### 4. Turn it on, and turn off any other PVR add-on
 
-Kodi would show both add-ons' channels, so turn the old one off. This disables it without deleting it,
-so you can go back at any time.
+If the add-on came with the AC-4 build, it's installed but off. Go to **Add-ons** > open box icon >
+**My add-ons** > **PVR clients**, choose **Direct Tuner PVR** and then **Enable**.
+
+If you also use another PVR add-on, Kodi would show both add-ons' channels, so turn the old one off.
+This disables it without deleting it, so you can go back at any time.
 
 1. Go to **Add-ons** > open box icon > **My add-ons** > **PVR clients**.
 2. Choose the old add-on, such as NextPVR, and then **Disable**.
@@ -183,8 +193,15 @@ Each recording is a `.ts` file with a `.json` file of the same name beside it.
 - **"No signal on this channel"** means the tuner couldn't lock on. It's a reception problem. ATSC 3.0
   usually needs a stronger signal than ATSC 1.0.
 - **One tuner device at a time.** If you have more than one, enter the address of the one to use.
-- **Network folders aren't tested yet.** A recordings folder on a network share should work, but a local
-  drive is the safe choice for now.
+- **Network folders aren't tested yet.** On Windows a recordings folder on a network share should work,
+  but a local drive is the safe choice for now. On Linux and Android, choose a local folder or one
+  already mounted by the system; Kodi's own `smb://` locations won't work.
+- **On Android,** recordings go by default to Kodi's own folder,
+  `Android/data/org.xbmc.kodiac4/files/Videos/Kodi Recordings`, which Android deletes if you uninstall
+  Kodi. To keep them, choose a folder such as `Movies` in the settings. Kodi asks for access to all
+  files the first time it starts; allow it, or only its own folder can be used.
+- **Broadcast discovery on Linux and Android is untested.** If the tuner isn't found, enter its IP
+  address in the settings.
 
 ## Reporting a problem
 

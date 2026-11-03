@@ -14,9 +14,9 @@
   <extension
     point="kodi.pvrclient"
     needs_configuration="false"
-    library_windx="@ADDON_LIBRARY@"/>
+    library_@ADDON_PLATFORM@="@ADDON_LIBRARY@"/>
   <extension point="xbmc.addon.metadata">
-    <platform>windx</platform>
+    <platform>@ADDON_PLATFORM_TAG@</platform>
     <license>GPL-2.0-or-later</license>
     <source>https://github.com/ferrellsl/Direct-Tuner-PVR</source>
     <assets>

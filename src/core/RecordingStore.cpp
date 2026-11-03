@@ -10,7 +10,6 @@
 #include "Json.h"
 
 #include <algorithm>
-#include <filesystem>
 
 namespace dt
 {
@@ -79,46 +78,33 @@ std::string RecordingStore::Folder() const
 
 std::string RecordingStore::MediaPath(const std::string& id) const
 {
-  return PathToUtf8(PathFromUtf8(Folder()) / PathFromUtf8(id + ".ts"));
+  return JoinPath(Folder(), id + ".ts");
 }
 
 std::string RecordingStore::SidecarPath(const std::string& id) const
 {
-  return PathToUtf8(PathFromUtf8(Folder()) / PathFromUtf8(id + ".json"));
+  return JoinPath(Folder(), id + ".json");
 }
 
 std::vector<RecordingInfo> RecordingStore::List() const
 {
   std::vector<RecordingInfo> recordings;
-  const std::filesystem::path root = PathFromUtf8(Folder());
-  std::error_code error;
-  if (root.empty() || !std::filesystem::is_directory(root, error))
+  const std::string root = Folder();
+  if (root.empty() || !IsDirectory(root))
     return recordings;
 
-  auto it = std::filesystem::recursive_directory_iterator(
-      root, std::filesystem::directory_options::skip_permission_denied, error);
-  const auto end = std::filesystem::recursive_directory_iterator();
-  while (!error && it != end)
+  for (const std::string& relative : ListFiles(root, ".json"))
   {
-    const std::filesystem::path path = it->path();
-    if (it->is_regular_file(error) && path.extension() == ".json")
+    std::string text;
+    Json json;
+    if (ReadWholeFile(JoinPath(root, relative), text) && Json::Parse(text, json) && json.IsObject())
     {
-      std::string text;
-      Json json;
-      std::filesystem::path relative = path.lexically_relative(root);
-      relative.replace_extension();
-      std::filesystem::path media = path;
-      media.replace_extension(".ts");
-      if (ReadWholeFile(PathToUtf8(path), text) && Json::Parse(text, json) && json.IsObject())
-      {
-        RecordingInfo info = FromJson(json);
-        info.id = PathToUtf8(relative.generic_u8string());
-        info.size = FileSize(PathToUtf8(media));
-        if (info.size >= 0)
-          recordings.push_back(std::move(info));
-      }
+      RecordingInfo info = FromJson(json);
+      info.id = relative.substr(0, relative.size() - 5);
+      info.size = FileSize(MediaPath(info.id));
+      if (info.size >= 0)
+        recordings.push_back(std::move(info));
     }
-    it.increment(error);
   }
 
   std::sort(recordings.begin(), recordings.end(),
@@ -140,16 +126,14 @@ bool RecordingStore::Find(const std::string& id, RecordingInfo& out) const
 
 bool RecordingStore::Delete(const std::string& id)
 {
-  std::error_code error;
-  const std::filesystem::path media = PathFromUtf8(MediaPath(id));
-  std::filesystem::remove(media, error);
-  const bool removed = !error;
-  std::filesystem::remove(PathFromUtf8(SidecarPath(id)), error);
+  const std::string media = MediaPath(id);
+  const bool removed = RemovePath(media);
+  RemovePath(SidecarPath(id));
 
   // Drop the show's folder when its last recording goes.
-  const std::filesystem::path parent = media.parent_path();
-  if (parent != PathFromUtf8(Folder()) && std::filesystem::is_empty(parent, error) && !error)
-    std::filesystem::remove(parent, error);
+  const std::string parent = ParentPath(media);
+  if (id.find('/') != std::string::npos && IsEmptyDirectory(parent))
+    RemovePath(parent);
   return removed;
 }
 
@@ -170,10 +154,7 @@ bool RecordingStore::Create(RecordingInfo& info)
     name += Format(" S%02dE%02d", info.season, info.episode);
   name += std::string(" ") + when;
 
-  const std::filesystem::path root = PathFromUtf8(Folder());
-  std::error_code error;
-  std::filesystem::create_directories(root / PathFromUtf8(folderName), error);
-  if (error)
+  if (!CreateDirectories(JoinPath(Folder(), folderName)))
     return false;
 
   std::string candidate = name;
@@ -223,12 +204,10 @@ int RecordingStore::Prune(unsigned int ruleId, int keep)
 
 bool RecordingStore::DriveSpace(uint64_t& total, uint64_t& used) const
 {
-  std::error_code error;
-  const std::filesystem::space_info space = std::filesystem::space(PathFromUtf8(Folder()), error);
-  if (error)
+  uint64_t available = 0;
+  if (!DiskSpace(Folder(), total, available))
     return false;
-  total = space.capacity;
-  used = space.capacity - space.available;
+  used = total - available;
   return true;
 }
 

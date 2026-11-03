@@ -16,15 +16,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
-#include <filesystem>
 
-#ifdef _WIN32
-#define Seek64 _fseeki64
-#define Tell64 _ftelli64
-#else
-#define Seek64 fseeko
-#define Tell64 ftello
-#endif
 
 namespace
 {
@@ -71,7 +63,7 @@ std::string DefaultRecordingsFolder()
 #endif
   if (!home)
     return kodi::addon::GetUserPath("recordings");
-  return dt::PathToUtf8(std::filesystem::path(home) / "Videos" / "Kodi Recordings");
+  return dt::JoinPath(dt::JoinPath(home, "Videos"), "Kodi Recordings");
 }
 
 bool FetchWithKodi(const std::string& url, std::string& body)
@@ -123,9 +115,7 @@ CPvrClient::CPvrClient(const kodi::addon::IInstanceInfo& instance) : CInstancePV
   LoadSettings();
 
   m_store.SetFolder(m_settings.recordingsFolder);
-  std::error_code error;
-  std::filesystem::create_directories(dt::PathFromUtf8(m_settings.recordingsFolder), error);
-  if (error)
+  if (!dt::CreateDirectories(m_settings.recordingsFolder))
     NotifyUser(true, "Can't create the recordings folder " + m_settings.recordingsFolder);
 
   m_pool.SetPreemptHandler([this](const dt::Channel& channel) {
@@ -140,7 +130,7 @@ CPvrClient::CPvrClient(const kodi::addon::IInstanceInfo& instance) : CInstancePV
   ConnectDevice();
 
   m_scheduler = std::make_unique<dt::Scheduler>(m_pool, m_store, m_guide, *this);
-  m_scheduler->Start(dt::PathToUtf8(dt::PathFromUtf8(kodi::addon::GetUserPath()) / "timers.json"));
+  m_scheduler->Start(dt::JoinPath(kodi::addon::GetUserPath(), "timers.json"));
 
   m_service = std::thread([this] { ServiceLoop(); });
 }
@@ -287,11 +277,7 @@ void CPvrClient::RefreshGuideFile(bool force)
   }
   else
   {
-    std::error_code error;
-    const auto written =
-        std::filesystem::last_write_time(dt::PathFromUtf8(m_settings.guideFile), error);
-    if (!error)
-      modified = static_cast<time_t>(written.time_since_epoch().count() / 10000000);
+    modified = dt::ModifiedTime(m_settings.guideFile);
   }
   if (!force && modified == m_guideFileTime)
     return;
@@ -826,11 +812,10 @@ bool CPvrClient::OpenLiveStream(const kodi::addon::PVRChannel& channel)
   // Live TV always plays from the ring, which needs somewhere to live even when the
   // user doesn't want timeshift. It stays small then.
   const int64_t capacity = std::max(m_timeshiftCapacity, MIN_TIMESHIFT_BYTES);
-  std::error_code error;
-  const std::filesystem::path folder = dt::PathFromUtf8(m_store.Folder()) / ".timeshift";
-  std::filesystem::create_directories(folder, error);
+  const std::string folder = dt::JoinPath(m_store.Folder(), ".timeshift");
+  dt::CreateDirectories(folder);
 
-  auto buffer = std::make_shared<dt::TimeshiftBuffer>(dt::PathToUtf8(folder / "live.ts"), capacity);
+  auto buffer = std::make_shared<dt::TimeshiftBuffer>(dt::JoinPath(folder, "live.ts"), capacity);
   if (!buffer->Open())
   {
     NotifyUser(true, "Can't write the live TV buffer in the recordings folder");
@@ -994,9 +979,9 @@ int CPvrClient::ReadRecordedStream(unsigned char* buffer, unsigned int size)
 int64_t CPvrClient::SeekRecordedStream(int64_t position, int whence)
 {
   std::lock_guard<std::mutex> lock(m_playMutex);
-  if (!m_playFile || Seek64(m_playFile, position, whence) != 0)
+  if (!m_playFile || dt::SeekFile(m_playFile, position, whence) != 0)
     return -1;
-  return Tell64(m_playFile);
+  return dt::TellFile(m_playFile);
 }
 
 int64_t CPvrClient::LengthRecordedStream()
