@@ -5,10 +5,13 @@ need NextPVR or any other server, and you don't need a SiliconDust DVR subscript
 
 **This is a pre-release for testing.** Expect rough edges, and please [report problems](#reporting-a-problem).
 
-**On its own, the add-on records only while Kodi is open.** To record with Kodi closed, and to share
-timers, recordings and tuners between every Kodi in the house, also install
-[Direct Tuner Recorder](https://github.com/ferrellsl/Direct-Tuner-Recorder) on one always-on Windows
-computer. See [Recording with Kodi closed](#recording-with-kodi-closed).
+**Recording with Kodi closed:** install
+[Direct Tuner Recorder](https://github.com/ferrellsl/Direct-Tuner-Recorder) on one computer that's usually
+on, running Windows or Linux. It records whether or not Kodi is running, wakes a Windows computer from sleep
+to record, and lets every Kodi in the house share the same timers, recordings and tuners. Each Kodi finds
+it by itself: there's nothing to set up in Kodi. See [Recording with Kodi closed](#recording-with-kodi-closed).
+
+Without the recorder, the add-on still records, but only while Kodi is open.
 
 ## What you need
 
@@ -127,12 +130,13 @@ Everything here is optional. Open the settings with **Configure**, as shown abov
 
 ![The last of the settings](docs/images/08-settings-more.png)
 
-Kodi restarts the add-on when you change most settings, which stops any recording in progress.
-
 When the add-on uses Direct Tuner Recorder, the recordings folder, guide file, copy-protected channels
 and tuner address are set in the recorder instead, and those settings here aren't used. The early and
 late minutes and the timeshift size still apply: new timers get this Kodi's padding, and pausing live
 TV happens on each Kodi's own computer.
+
+Kodi restarts the add-on when you change most settings. Without the recorder, that stops any recording
+in progress; with it, recordings carry on, since the recorder makes them.
 
 ## Guide
 
@@ -191,26 +195,32 @@ Each recording is a `.ts` file with a `.json` file of the same name beside it.
 
 ## Recording with Kodi closed
 
-[Direct Tuner Recorder](https://github.com/ferrellsl/Direct-Tuner-Recorder) is a separate, optional
-program for Windows. Install it on **one** computer that's usually on. It runs in the background and:
+[Direct Tuner Recorder](https://github.com/ferrellsl/Direct-Tuner-Recorder) is a separate program for
+Windows 10 or 11 (64-bit) or Linux (x86_64; the Linux version is untested so far). Install it on **one**
+computer that's usually on, following its README. It runs in the background and:
 
-- Records your timers whether or not Kodi is running, and wakes the computer from sleep to record.
+- Records your timers whether or not Kodi is running. On Windows it wakes the computer from sleep to
+  record; on Linux, turn off automatic sleep on that computer.
 - Shares one set of timers, recordings and tuners with every Kodi in the house, on any device.
 - Lets a recording take a tuner back from live TV on any Kodi, so a show isn't missed when every
   tuner is in use.
 
 You don't change anything in Kodi. With this add-on's default settings, every Kodi finds the recorder
-by itself the next time it starts and shows a notice that it's using it. Any timers a Kodi had move to
+by itself the next time it starts and shows a notice that it's using it. From then on you schedule,
+watch and delete in Kodi exactly as described above, and you can close Kodi or turn that device off. Any timers a Kodi had move to
 the recorder automatically. Recordings that Kodi made on its own stay where they are; to see them
 alongside the new ones, move their files into the recorder's recordings folder.
 
-Only install the recorder on one computer per tuner.
+Only install the recorder on one computer per tuner. If a Kodi doesn't find it, for example on another
+subnet, set **Direct Tuner Recorder** to **Use this address** in the [settings](#settings) and enter the
+recorder computer's address.
 
 ## Known limits
 
-- **Without Direct Tuner Recorder, recordings run only while Kodi is open.** Close Kodi during a
-  recording and it stops. If you reopen Kodi before the show ends, recording carries on in a second
-  file. Kodi must also stay awake, so set your PC not to sleep.
+- **Without [Direct Tuner Recorder](#recording-with-kodi-closed), recordings run only while Kodi is
+  open.** Close Kodi during a recording and it stops; if you reopen Kodi before the show ends, recording
+  carries on in a second file. That Kodi's device must also stay awake. With the recorder, none of this
+  applies.
 - **A recording takes priority over live TV.** If every tuner is busy, a recording stops whatever live TV
   you're watching. Watching and recording the same channel uses only one tuner.
 - **"Play recording / Switch to channel".** Kodi asks this when you open a channel that's recording. It's
