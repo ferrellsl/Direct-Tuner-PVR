@@ -28,7 +28,7 @@ Without the recorder, the add-on still records, but only while Kodi is open.
 
 On Linux and Android, add-ons with compiled code can't be installed from a zip, so the add-on only
 comes inside the AC-4 build there. Wherever it's included, it starts **off**: skip to
-[step 4](#4-if-you-use-another-pvr-add-on) to turn it on under **My add-ons** > **PVR clients**.
+[step 4](#4-turn-it-on-and-turn-off-any-other-pvr-add-on) to turn it on under **My add-ons** > **PVR clients**.
 
 ### Which Kodi to use
 
