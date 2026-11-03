@@ -44,6 +44,8 @@ public:
   virtual bool OnData(const uint8_t* data, size_t size) = 0;
   // Stream data was lost at this point.
   virtual void OnGap() {}
+  // No more data will come, for example because a recording took the tuner.
+  virtual void OnEnd() {}
 };
 
 // One tuner's stream, fanned out to any number of sinks. Reconnects when the stream drops.
@@ -168,6 +170,7 @@ public:
 
   bool Open();
   bool OnData(const uint8_t* data, size_t size) override;
+  void OnEnd() override { MarkEnded(); }
 
   // Blocks up to timeoutMs for data. 0 on timeout, -1 after MarkEnded() with nothing left.
   int Read(uint8_t* buffer, size_t size, int timeoutMs);

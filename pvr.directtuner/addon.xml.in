@@ -23,7 +23,7 @@
       <icon>icon.png</icon>
     </assets>
     <summary lang="en_GB">Live TV and recording from an HDHomeRun tuner, with no server or subscription</summary>
-    <description lang="en_GB">Watches, pauses and records TV straight from an HDHomeRun tuner on your network. No backend server or DVR subscription is needed. Recordings run only while Kodi is open.</description>
-    <disclaimer lang="en_GB">Recordings run only while Kodi is open. Not affiliated with SiliconDust.</disclaimer>
+    <description lang="en_GB">Watches, pauses and records TV straight from an HDHomeRun tuner on your network. No backend server or DVR subscription is needed. On its own it records only while Kodi is open; with the optional Direct Tuner Recorder on an always-on computer, it records with Kodi closed and every Kodi in the house shares the timers, recordings and tuners.</description>
+    <disclaimer lang="en_GB">Without Direct Tuner Recorder, recordings run only while Kodi is open. Not affiliated with SiliconDust.</disclaimer>
   </extension>
 </addon>

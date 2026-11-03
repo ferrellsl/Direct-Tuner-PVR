@@ -8,62 +8,12 @@
 
 #include "Common.h"
 #include "Json.h"
+#include "Wire.h"
 
 #include <algorithm>
 
 namespace dt
 {
-namespace
-{
-
-Json ToJson(const RecordingInfo& info)
-{
-  Json json = Json::Object();
-  json.Set("title", info.title);
-  json.Set("episodeTitle", info.episodeTitle);
-  json.Set("plot", info.plot);
-  json.Set("icon", info.icon);
-  json.Set("channelName", info.channelName);
-  json.Set("genre", info.genre);
-  json.Set("firstAired", info.firstAired);
-  json.Set("episodeKey", info.episodeKey);
-  json.Set("status", info.status);
-  json.Set("note", info.note);
-  json.Set("channelUid", info.channelUid);
-  json.Set("start", static_cast<long long>(info.start));
-  json.Set("duration", info.duration);
-  json.Set("season", info.season);
-  json.Set("episode", info.episode);
-  json.Set("epgUid", info.epgUid);
-  json.Set("ruleId", info.ruleId);
-  return json;
-}
-
-RecordingInfo FromJson(const Json& json)
-{
-  RecordingInfo info;
-  info.title = json["title"].AsString();
-  info.episodeTitle = json["episodeTitle"].AsString();
-  info.plot = json["plot"].AsString();
-  info.icon = json["icon"].AsString();
-  info.channelName = json["channelName"].AsString();
-  info.genre = json["genre"].AsString();
-  info.firstAired = json["firstAired"].AsString();
-  info.episodeKey = json["episodeKey"].AsString();
-  info.status = json["status"].AsString("complete");
-  info.note = json["note"].AsString();
-  info.channelUid = json["channelUid"].AsInt();
-  info.start = static_cast<time_t>(json["start"].AsInt64());
-  info.duration = json["duration"].AsInt();
-  info.season = json["season"].AsInt(-1);
-  info.episode = json["episode"].AsInt(-1);
-  info.epgUid = static_cast<unsigned int>(json["epgUid"].AsNumber());
-  info.ruleId = static_cast<unsigned int>(json["ruleId"].AsNumber());
-  return info;
-}
-
-} // namespace
-
 void RecordingStore::SetFolder(const std::string& folder)
 {
   std::lock_guard<std::mutex> lock(m_mutex);
@@ -99,7 +49,7 @@ std::vector<RecordingInfo> RecordingStore::List() const
     Json json;
     if (ReadWholeFile(JoinPath(root, relative), text) && Json::Parse(text, json) && json.IsObject())
     {
-      RecordingInfo info = FromJson(json);
+      RecordingInfo info = RecordingFromJson(json);
       info.id = relative.substr(0, relative.size() - 5);
       info.size = FileSize(MediaPath(info.id));
       if (info.size >= 0)
@@ -118,7 +68,7 @@ bool RecordingStore::Find(const std::string& id, RecordingInfo& out) const
   Json json;
   if (!ReadWholeFile(SidecarPath(id), text) || !Json::Parse(text, json) || !json.IsObject())
     return false;
-  out = FromJson(json);
+  out = RecordingFromJson(json);
   out.id = id;
   out.size = FileSize(MediaPath(id));
   return true;
@@ -166,7 +116,7 @@ bool RecordingStore::Create(RecordingInfo& info)
 
 bool RecordingStore::Save(const RecordingInfo& info)
 {
-  return WriteFileAtomic(SidecarPath(info.id), ToJson(info).Dump());
+  return WriteFileAtomic(SidecarPath(info.id), RecordingToJson(info).Dump());
 }
 
 int RecordingStore::RecoverInterrupted()

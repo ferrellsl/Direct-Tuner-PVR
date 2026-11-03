@@ -239,11 +239,13 @@ void HttpStream::Close()
     CloseSocket(s);
 }
 
-bool HttpStream::Open(const std::string& url, int timeoutMs)
+bool HttpStream::Open(const std::string& url, int timeoutMs, const std::string& method,
+                      const std::string& extraHeaders, const std::string& body)
 {
   Close();
   m_status = 0;
   m_deviceError = 0;
+  m_headers.clear();
   m_pending.clear();
   m_pendingOffset = 0;
 
@@ -265,9 +267,12 @@ bool HttpStream::Open(const std::string& url, int timeoutMs)
     m_localAddress = text;
   }
 
-  const std::string request = "GET " + parsed.path + " HTTP/1.1\r\nHost: " + parsed.host + ":" +
-                              parsed.port +
-                              "\r\nUser-Agent: Kodi-pvr.directtuner\r\nConnection: close\r\n\r\n";
+  std::string request = method + " " + parsed.path + " HTTP/1.1\r\nHost: " + parsed.host + ":" +
+                        parsed.port + "\r\nUser-Agent: Kodi-pvr.directtuner\r\nConnection: close\r\n" +
+                        extraHeaders;
+  if (!body.empty() || method == "POST" || method == "PUT")
+    request += "Content-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) + "\r\n";
+  request += "\r\n" + body;
   if (!SendAll(s, request, 3000))
   {
     Close();
@@ -305,6 +310,7 @@ bool HttpStream::Open(const std::string& url, int timeoutMs)
     m_status = std::atoi(header.c_str() + space + 1);
 
   const std::string lower = ToLower(header.substr(0, headerEnd));
+  m_headers = "\r\n" + lower + "\r\n";
   const size_t errorPos = lower.find("x-hdhomerun-error:");
   if (errorPos != std::string::npos)
     m_deviceError = std::atoi(header.c_str() + errorPos + 18);
@@ -312,6 +318,15 @@ bool HttpStream::Open(const std::string& url, int timeoutMs)
   const size_t bodyStart = headerEnd + 4;
   m_pending.assign(header.begin() + static_cast<std::ptrdiff_t>(bodyStart), header.end());
   return true;
+}
+
+std::string HttpStream::Header(const std::string& name) const
+{
+  const size_t pos = m_headers.find("\r\n" + name + ":");
+  if (pos == std::string::npos)
+    return {};
+  const size_t start = pos + name.size() + 3;
+  return Trim(m_headers.substr(start, m_headers.find("\r\n", start) - start));
 }
 
 int HttpStream::Read(uint8_t* buffer, size_t size, int timeoutMs)
@@ -357,6 +372,114 @@ bool HttpGetText(const std::string& url, int timeoutMs, std::string& body, int* 
     body.append(reinterpret_cast<char*>(chunk), static_cast<size_t>(count));
   }
   return false;
+}
+
+bool HttpRequest(const std::string& method, const std::string& url, const std::string& body,
+                 int timeoutMs, int& status, std::string& reply)
+{
+  HttpStream stream;
+  status = 0;
+  reply.clear();
+  if (!stream.Open(url, timeoutMs, method, {}, body))
+    return false;
+  status = stream.Status();
+
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+  uint8_t chunk[16 * 1024];
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    const int count = stream.Read(chunk, sizeof(chunk), 500);
+    if (count < 0)
+      return true;
+    reply.append(reinterpret_cast<char*>(chunk), static_cast<size_t>(count));
+  }
+  return false;
+}
+
+namespace
+{
+
+// Sends packet as a broadcast from every local address and collects the replies.
+template <typename OnReply>
+void Broadcast(const std::vector<uint8_t>& packet, int port, int timeoutMs, OnReply onReply)
+{
+  std::vector<Socket> sockets;
+  for (const uint32_t address : LocalIpv4Addresses())
+  {
+    Socket s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    sockaddr_in local{};
+    local.sin_family = AF_INET;
+    local.sin_addr.s_addr = address;
+    const int on = 1;
+    setsockopt(s, SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char*>(&on), sizeof(on));
+    if (bind(s, reinterpret_cast<sockaddr*>(&local), sizeof(local)) != 0)
+    {
+      CloseSocket(s);
+      continue;
+    }
+    SetNonBlocking(s);
+    sockaddr_in target{};
+    target.sin_family = AF_INET;
+    target.sin_port = htons(static_cast<uint16_t>(port));
+    target.sin_addr.s_addr = INADDR_BROADCAST;
+    sendto(s, reinterpret_cast<const char*>(packet.data()), static_cast<int>(packet.size()), 0,
+           reinterpret_cast<sockaddr*>(&target), sizeof(target));
+    sockets.push_back(s);
+  }
+
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+  while (!sockets.empty() && std::chrono::steady_clock::now() < deadline)
+  {
+    fd_set set;
+    FD_ZERO(&set);
+    int highest = 0;
+    for (const Socket s : sockets)
+    {
+      FD_SET(s, &set);
+      highest = std::max(highest, static_cast<int>(s));
+    }
+    timeval timeout{0, 100 * 1000};
+    if (select(highest + 1, &set, nullptr, nullptr, &timeout) <= 0)
+      continue;
+    for (const Socket s : sockets)
+    {
+      if (!FD_ISSET(s, &set))
+        continue;
+      uint8_t reply[2048];
+      sockaddr_in from{};
+      socklen_t fromSize = sizeof(from);
+      const int count = recvfrom(s, reinterpret_cast<char*>(reply), sizeof(reply), 0,
+                                 reinterpret_cast<sockaddr*>(&from), &fromSize);
+      if (count <= 0)
+        continue;
+      char text[INET_ADDRSTRLEN] = {};
+      inet_ntop(AF_INET, &from.sin_addr, text, sizeof(text));
+      onReply(reply, count, std::string(text));
+    }
+  }
+
+  for (const Socket s : sockets)
+    CloseSocket(s);
+}
+
+} // namespace
+
+std::vector<std::string> DiscoverRecorders(int timeoutMs)
+{
+  const std::string request = kRecorderDiscoverRequest;
+  const std::string prefix = kRecorderDiscoverReply;
+  std::vector<std::string> found;
+  Broadcast(std::vector<uint8_t>(request.begin(), request.end()), kRecorderDiscoveryPort, timeoutMs,
+            [&](const uint8_t* data, int size, const std::string& from) {
+              const std::string text(reinterpret_cast<const char*>(data), static_cast<size_t>(size));
+              if (text.compare(0, prefix.size(), prefix) != 0)
+                return;
+              // The reply carries the port; the address is wherever it came from.
+              const std::string url = "http://" + from + ":" + Trim(text.substr(prefix.size()));
+              if (std::find(found.begin(), found.end(), url) == found.end())
+                found.push_back(url);
+            });
+  return found;
 }
 
 std::vector<std::string> DiscoverDevices(int timeoutMs)

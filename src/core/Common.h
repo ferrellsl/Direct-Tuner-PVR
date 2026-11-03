@@ -33,6 +33,8 @@ void Log(LogLevel level, const char* format, ...);
 std::string Format(const char* format, ...);
 std::string ToLower(std::string text);
 std::string Trim(const std::string& text);
+std::string UrlEncode(const std::string& text);
+std::string UrlDecode(const std::string& text);
 
 // Paths are UTF-8 strings throughout, as they come from Kodi. These wrap the file system because
 // std::filesystem is missing from the Android NDK that Kodi 21 builds with.

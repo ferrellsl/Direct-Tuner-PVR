@@ -6,26 +6,19 @@
 
 #pragma once
 
-#include "../core/Device.h"
-#include "../core/Guide.h"
+#include "../core/Backend.h"
 #include "../core/Pump.h"
-#include "../core/RecordingStore.h"
-#include "../core/Scheduler.h"
 
 #include <kodi/AddonBase.h>
 #include <kodi/addon-instance/PVR.h>
 
-#include <atomic>
-#include <condition_variable>
-#include <cstdio>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
-#include <vector>
 
-class ATTR_DLL_LOCAL CPvrClient : public kodi::addon::CInstancePVRClient, public dt::ISchedulerHost
+// Translates between Kodi and a backend: this Kodi's own (Backend), or the recorder service on
+// another computer (RemoteBackend).
+class ATTR_DLL_LOCAL CPvrClient : public kodi::addon::CInstancePVRClient, public dt::IBackendHost
 {
 public:
   explicit CPvrClient(const kodi::addon::IInstanceInfo& instance);
@@ -84,59 +77,44 @@ public:
   int64_t SeekRecordedStream(int64_t position, int whence) override;
   int64_t LengthRecordedStream() override;
 
-  // ISchedulerHost
-  void NotifyUser(bool isError, const std::string& text) override;
+  // IBackendHost
+  void Notify(bool isError, const std::string& text) override;
+  void ConnectionChanged(bool connected, const std::string& text) override;
+  void ChannelsChanged() override;
+  void GuideChanged() override;
   void TimersChanged() override;
   void RecordingsChanged() override;
-  bool LookupChannel(int uid, dt::Channel& out) override;
+  void LiveStopped(int channelUid, const std::string& reason) override;
 
 private:
   struct Settings
   {
-    std::string manualHost;
-    std::string guideFile;
-    std::string recordingsFolder;
-    bool hideDrm = true;
+    int recorderMode = 0; // 0 find on the network, 1 none, 2 the address below
+    std::string recorderAddress;
+    dt::BackendSettings backend;
     int marginBefore = 1;
     int marginAfter = 3;
     int timeshiftGb = 4;
   };
 
   void LoadSettings();
-  bool ConnectDevice();
-  void ServiceLoop();
-  void RefreshDeviceGuide();
-  void RefreshGuideFile(bool force);
-  void GuideUpdated();
+  // The recorder service to use, or empty for this Kodi's own backend.
+  std::string FindRecorder();
+  // Hands this Kodi's own timers to the recorder the first time it's used.
+  void MoveTimersToRecorder();
   dt::Timer FromKodi(const kodi::addon::PVRTimer& timer);
-  std::string RecordingPath(const std::string& id);
 
   Settings m_settings;
-  dt::DeviceInfo m_device;
-  std::atomic<bool> m_connected{false};
-  mutable std::mutex m_deviceMutex;
-  std::vector<dt::Channel> m_channels;
-  std::map<int, std::string> m_icons;
-
-  dt::TunerPool m_pool;
-  dt::GuideStore m_guide;
-  dt::RecordingStore m_store;
-  std::unique_ptr<dt::Scheduler> m_scheduler;
-
-  std::thread m_service;
-  std::mutex m_serviceMutex;
-  std::condition_variable m_serviceWake;
-  bool m_serviceStop = false;
-  bool m_refreshNow = false;
-  time_t m_guideFileTime = 0;
+  bool m_remote = false;
+  std::string m_timeshiftFolder;
+  int64_t m_timeshiftCapacity = 0;
+  std::unique_ptr<dt::IBackend> m_backend;
 
   std::mutex m_liveMutex;
-  std::unique_ptr<dt::TunerLease> m_liveLease;
+  std::unique_ptr<dt::LiveHandle> m_liveHandle;
   std::shared_ptr<dt::TimeshiftBuffer> m_live;
   int m_liveChannel = 0;
-  int64_t m_timeshiftCapacity = 0;
 
   std::mutex m_playMutex;
-  std::FILE* m_playFile = nullptr;
-  std::string m_playId;
+  std::unique_ptr<dt::MediaReader> m_play;
 };

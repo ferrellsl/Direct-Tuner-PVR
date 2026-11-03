@@ -7,14 +7,16 @@
 #include "PvrClient.h"
 
 #include "../core/Common.h"
+#include "../core/Json.h"
 #include "../core/Net.h"
+#include "../core/RemoteBackend.h"
+#include "../core/Wire.h"
 
 #include <kodi/Filesystem.h>
 #include <kodi/General.h>
 #include <kodi/addon-instance/inputstream/TimingConstants.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cstdlib>
 
 
@@ -27,12 +29,9 @@ constexpr unsigned int TIMER_SERIES_EPG = 3;
 constexpr unsigned int TIMER_SERIES_MANUAL = 4;
 constexpr unsigned int TIMER_CHILD = 5;
 
-constexpr int GUIDE_REFRESH_SECONDS = 4 * 60 * 60;
-constexpr int LINEUP_REFRESH_SECONDS = 60 * 60;
-constexpr int FILE_CHECK_SECONDS = 5 * 60;
-constexpr int RECONNECT_SECONDS = 30;
 constexpr int LIVE_READ_TIMEOUT_MS = 20000;
 constexpr int64_t MIN_TIMESHIFT_BYTES = 256LL * 1024 * 1024;
+constexpr int RECORDER_PORT = 8866;
 
 void LogFromCore(dt::LogLevel level, const std::string& text)
 {
@@ -79,6 +78,15 @@ bool FetchWithKodi(const std::string& url, std::string& body)
   return !body.empty();
 }
 
+time_t ModifiedWithKodi(const std::string& path)
+{
+  // Kodi's file layer can't open \\server\share paths, so plain paths are checked directly.
+  if (path.find("://") == std::string::npos)
+    return dt::ModifiedTime(path);
+  kodi::vfs::FileStatus status;
+  return kodi::vfs::StatFile(path, status) ? status.GetModificationTime() : 0;
+}
+
 PVR_TIMER_STATE StateToKodi(dt::TimerState state)
 {
   switch (state)
@@ -114,61 +122,60 @@ CPvrClient::CPvrClient(const kodi::addon::IInstanceInfo& instance) : CInstancePV
   dt::NetInit();
   LoadSettings();
 
-  m_store.SetFolder(m_settings.recordingsFolder);
-  if (!dt::CreateDirectories(m_settings.recordingsFolder))
-    NotifyUser(true, "Can't create the recordings folder " + m_settings.recordingsFolder);
+  const std::string recorder = FindRecorder();
+  m_remote = !recorder.empty();
+  if (m_remote)
+  {
+    kodi::Log(ADDON_LOG_INFO, "Using the recorder at %s", recorder.c_str());
+    m_backend = std::make_unique<dt::RemoteBackend>(*this, recorder);
+    // Live TV's pause buffer stays on this computer.
+    m_timeshiftFolder = kodi::vfs::TranslateSpecialProtocol(kodi::addon::GetUserPath("timeshift"));
+  }
+  else
+  {
+    dt::BackendIo io;
+    io.fetch = FetchWithKodi;
+    io.modified = ModifiedWithKodi;
+    m_backend = std::make_unique<dt::Backend>(
+        *this, m_settings.backend, io,
+        dt::JoinPath(kodi::vfs::TranslateSpecialProtocol(kodi::addon::GetUserPath()), "timers.json"));
+    m_timeshiftFolder = dt::JoinPath(m_settings.backend.recordingsFolder, ".timeshift");
+  }
 
-  m_pool.SetPreemptHandler([this](const dt::Channel& channel) {
-    {
-      std::lock_guard<std::mutex> lock(m_liveMutex);
-      if (m_live && m_liveChannel == channel.uid)
-        m_live->MarkEnded();
-    }
-    NotifyUser(true, "Live TV stopped: a recording needed the tuner");
-  });
-
-  ConnectDevice();
-
-  m_scheduler = std::make_unique<dt::Scheduler>(m_pool, m_store, m_guide, *this);
-  m_scheduler->Start(dt::JoinPath(kodi::addon::GetUserPath(), "timers.json"));
-
-  m_service = std::thread([this] { ServiceLoop(); });
+  m_backend->Start();
+  if (m_remote && m_backend->Connected())
+    MoveTimersToRecorder();
 }
 
 CPvrClient::~CPvrClient()
 {
-  {
-    std::lock_guard<std::mutex> lock(m_serviceMutex);
-    m_serviceStop = true;
-    m_serviceWake.notify_all();
-  }
-  if (m_service.joinable())
-    m_service.join();
-
-  m_scheduler->Stop();
   CloseLiveStream();
   CloseRecordedStream();
+  m_backend->Stop();
+  m_backend.reset();
   dt::SetLogSink(nullptr);
 }
 
 void CPvrClient::LoadSettings()
 {
-  m_settings.manualHost = dt::Trim(kodi::addon::GetSettingString("manual_host"));
-  m_settings.guideFile = dt::Trim(kodi::addon::GetSettingString("guide_file"));
-  m_settings.recordingsFolder = dt::Trim(kodi::addon::GetSettingString("recordings_folder"));
-  m_settings.hideDrm = kodi::addon::GetSettingBoolean("hide_drm", true);
+  m_settings.recorderMode = kodi::addon::GetSettingInt("recorder_mode", 0);
+  m_settings.recorderAddress = dt::Trim(kodi::addon::GetSettingString("recorder_address"));
+  m_settings.backend.manualHost = dt::Trim(kodi::addon::GetSettingString("manual_host"));
+  m_settings.backend.guideFile = dt::Trim(kodi::addon::GetSettingString("guide_file"));
+  m_settings.backend.recordingsFolder = dt::Trim(kodi::addon::GetSettingString("recordings_folder"));
+  m_settings.backend.hideDrm = kodi::addon::GetSettingBoolean("hide_drm", true);
   m_settings.marginBefore = kodi::addon::GetSettingInt("margin_before", 1);
   m_settings.marginAfter = kodi::addon::GetSettingInt("margin_after", 3);
   m_settings.timeshiftGb = kodi::addon::GetSettingInt("timeshift_gb", 4);
 
-  if (m_settings.recordingsFolder.empty())
-    m_settings.recordingsFolder = DefaultRecordingsFolder();
-  m_settings.recordingsFolder = kodi::vfs::TranslateSpecialProtocol(m_settings.recordingsFolder);
+  std::string& folder = m_settings.backend.recordingsFolder;
+  if (folder.empty())
+    folder = DefaultRecordingsFolder();
+  folder = kodi::vfs::TranslateSpecialProtocol(folder);
 #ifdef _WIN32
   // Kodi's folder browser gives smb:// paths, and the core writes through Windows.
-  if (m_settings.recordingsFolder.rfind("smb://", 0) == 0)
+  if (folder.rfind("smb://", 0) == 0)
   {
-    std::string& folder = m_settings.recordingsFolder;
     folder = "\\\\" + folder.substr(6);
     std::replace(folder.begin(), folder.end(), '/', '\\');
   }
@@ -176,219 +183,63 @@ void CPvrClient::LoadSettings()
   m_timeshiftCapacity = static_cast<int64_t>(m_settings.timeshiftGb) * 1024 * 1024 * 1024;
 }
 
-bool CPvrClient::ConnectDevice()
+std::string CPvrClient::FindRecorder()
 {
-  dt::DeviceInfo device;
-  std::string error;
-  if (!dt::FindDevice(m_settings.manualHost, device, error))
+  if (m_settings.recorderMode == 1)
+    return {};
+
+  if (m_settings.recorderMode == 2)
   {
-    kodi::Log(ADDON_LOG_WARNING, "%s", error.c_str());
-    ConnectionStateChange(error, PVR_CONNECTION_STATE_SERVER_UNREACHABLE, error);
-    m_connected = false;
-    return false;
+    std::string url = m_settings.recorderAddress;
+    if (url.empty())
+      return {};
+    if (url.find("://") == std::string::npos)
+      url = "http://" + url;
+    if (url.find(':', 7) == std::string::npos)
+      url += ":" + std::to_string(RECORDER_PORT);
+    // Use it even if it's down right now: the add-on keeps trying, and recording here instead
+    // would split the timers between two places.
+    if (!dt::RemoteBackend::Probe(url))
+      kodi::Log(ADDON_LOG_WARNING, "The recorder at %s isn't answering yet", url.c_str());
+    return url;
   }
 
-  std::vector<dt::Channel> channels;
-  if (!dt::FetchLineup(device, m_settings.hideDrm, channels) || channels.empty())
-  {
-    error = "The tuner at " + device.baseUrl + " has no channels. Run a channel scan on the tuner.";
-    kodi::Log(ADDON_LOG_WARNING, "%s", error.c_str());
-    ConnectionStateChange(error, PVR_CONNECTION_STATE_SERVER_UNREACHABLE, error);
-    m_connected = false;
-    return false;
-  }
-
-  kodi::Log(ADDON_LOG_INFO, "Connected to %s %s at %s: %d tuners, %d channels",
-            device.friendlyName.c_str(), device.id.c_str(), device.baseUrl.c_str(), device.tunerCount,
-            static_cast<int>(channels.size()));
-
-  {
-    std::lock_guard<std::mutex> lock(m_deviceMutex);
-    m_device = device;
-    m_channels = std::move(channels);
-  }
-  m_pool.SetTunerCount(device.tunerCount);
-  if (m_scheduler)
-    m_scheduler->TunerCountChanged();
-  m_connected = true;
-  ConnectionStateChange(device.baseUrl, PVR_CONNECTION_STATE_CONNECTED, "");
-  return true;
+  for (const std::string& url : dt::DiscoverRecorders(1500))
+    if (dt::RemoteBackend::Probe(url))
+      return url;
+  return {};
 }
 
-void CPvrClient::GuideUpdated()
+void CPvrClient::MoveTimersToRecorder()
 {
-  std::vector<int> uids;
-  {
-    std::lock_guard<std::mutex> lock(m_deviceMutex);
-    for (const dt::Channel& channel : m_channels)
-      uids.push_back(channel.uid);
-  }
-  for (const int uid : uids)
-    TriggerEpgUpdate(static_cast<unsigned int>(uid));
-  m_scheduler->GuideChanged();
-}
-
-void CPvrClient::RefreshDeviceGuide()
-{
-  dt::DeviceInfo device;
-  {
-    std::lock_guard<std::mutex> lock(m_deviceMutex);
-    device = m_device;
-  }
-
-  dt::ChannelEvents events;
-  std::map<int, std::string> icons;
-  if (!dt::FetchDeviceGuide(device, FetchWithKodi, events, icons))
-  {
-    kodi::Log(ADDON_LOG_WARNING, "Couldn't read the guide from SiliconDust");
-    return;
-  }
-
-  size_t count = 0;
-  for (const auto& item : events)
-    count += item.second.size();
-  kodi::Log(ADDON_LOG_INFO, "Device guide: %d channels, %d programs", static_cast<int>(events.size()),
-            static_cast<int>(count));
-
-  m_guide.SetDeviceGuide(std::move(events));
-  bool newIcons;
-  {
-    std::lock_guard<std::mutex> lock(m_deviceMutex);
-    newIcons = icons != m_icons;
-    m_icons = std::move(icons);
-  }
-  if (newIcons)
-    TriggerChannelUpdate();
-}
-
-void CPvrClient::RefreshGuideFile(bool force)
-{
-  if (m_settings.guideFile.empty())
-    return;
-
-  // Kodi's file layer can't open \server\share paths, so plain paths are read directly.
-  const bool kodiPath = m_settings.guideFile.find("://") != std::string::npos;
-  time_t modified = 0;
-  if (kodiPath)
-  {
-    kodi::vfs::FileStatus status;
-    if (kodi::vfs::StatFile(m_settings.guideFile, status))
-      modified = status.GetModificationTime();
-  }
-  else
-  {
-    modified = dt::ModifiedTime(m_settings.guideFile);
-  }
-  if (!force && modified == m_guideFileTime)
-    return;
-
+  const std::string path =
+      dt::JoinPath(kodi::vfs::TranslateSpecialProtocol(kodi::addon::GetUserPath()), "timers.json");
   std::string text;
-  const bool opened = kodiPath ? FetchWithKodi(m_settings.guideFile, text)
-                               : dt::ReadWholeFile(m_settings.guideFile, text);
-  if (!opened)
-  {
-    NotifyUser(true, "Can't open the guide file " + m_settings.guideFile);
-    m_guideFileTime = modified;
+  dt::Json root;
+  if (!dt::ReadWholeFile(path, text) || !dt::Json::Parse(text, root))
     return;
-  }
 
-  std::vector<dt::Channel> channels;
+  const time_t now = std::time(nullptr);
+  int moved = 0;
+  for (const dt::Json& item : root["timers"].Items())
   {
-    std::lock_guard<std::mutex> lock(m_deviceMutex);
-    channels = m_channels;
+    dt::Timer timer = dt::TimerFromJson(item);
+    // Series rules bring their own episodes back; past one-off timers have nothing left to do.
+    if (timer.kind == dt::TimerKind::Child ||
+        (timer.kind == dt::TimerKind::Once && timer.WindowEnd() <= now))
+      continue;
+    timer.id = 0;
+    timer.state = dt::TimerState::Scheduled;
+    std::string error;
+    if (m_backend->AddTimer(timer, error) != 0)
+      ++moved;
+    else
+      kodi::Log(ADDON_LOG_WARNING, "Couldn't move the timer %s: %s", timer.title.c_str(), error.c_str());
   }
 
-  dt::ChannelEvents events;
-  dt::XmltvStats stats;
-  if (!dt::ParseXmltv(text, channels, events, &stats))
-  {
-    NotifyUser(true, "The guide file isn't valid XMLTV");
-    m_guideFileTime = modified;
-    return;
-  }
-
-  kodi::Log(ADDON_LOG_INFO, "Guide file: %d of %d channels matched, %d programs", stats.channelsMatched,
-            static_cast<int>(channels.size()), stats.programmes);
-  m_guide.SetXmltv(std::move(events));
-  m_guideFileTime = modified;
-}
-
-void CPvrClient::ServiceLoop()
-{
-  time_t nextGuide = 0;
-  time_t nextLineup = std::time(nullptr) + LINEUP_REFRESH_SECONDS;
-  time_t nextFile = 0;
-  time_t nextConnect = 0;
-
-  std::unique_lock<std::mutex> lock(m_serviceMutex);
-  while (!m_serviceStop)
-  {
-    const time_t now = std::time(nullptr);
-    if (m_refreshNow)
-    {
-      m_refreshNow = false;
-      nextGuide = nextFile = nextConnect = nextLineup = 0;
-    }
-    lock.unlock();
-
-    bool changed = false;
-    if (!m_connected && now >= nextConnect)
-    {
-      nextConnect = now + RECONNECT_SECONDS;
-      if (ConnectDevice())
-      {
-        TriggerChannelUpdate();
-        nextGuide = 0;
-      }
-    }
-
-    if (m_connected)
-    {
-      if (now >= nextLineup)
-      {
-        nextLineup = now + LINEUP_REFRESH_SECONDS;
-        dt::DeviceInfo device;
-        {
-          std::lock_guard<std::mutex> deviceLock(m_deviceMutex);
-          device = m_device;
-        }
-        std::vector<dt::Channel> channels;
-        if (dt::FetchLineup(device, m_settings.hideDrm, channels) && !channels.empty())
-        {
-          {
-            std::lock_guard<std::mutex> deviceLock(m_deviceMutex);
-            m_channels = std::move(channels);
-          }
-          TriggerChannelUpdate();
-        }
-        else if (m_pool.ActiveCount() == 0)
-        {
-          m_connected = false;
-          ConnectionStateChange("Lost contact with the tuner", PVR_CONNECTION_STATE_SERVER_UNREACHABLE, "");
-        }
-      }
-      if (now >= nextGuide)
-      {
-        nextGuide = now + GUIDE_REFRESH_SECONDS;
-        RefreshDeviceGuide();
-        RefreshGuideFile(true);
-        changed = true;
-      }
-      else if (now >= nextFile)
-      {
-        nextFile = now + FILE_CHECK_SECONDS;
-        const time_t before = m_guideFileTime;
-        RefreshGuideFile(false);
-        changed = before != m_guideFileTime;
-      }
-    }
-
-    if (changed)
-      GuideUpdated();
-
-    lock.lock();
-    m_serviceWake.wait_for(lock, std::chrono::seconds(5));
-  }
+  dt::RenamePath(path, path + ".moved");
+  if (moved > 0)
+    Notify(false, dt::Format("Moved %d timer(s) to the recorder", moved));
 }
 
 PVR_ERROR CPvrClient::GetCapabilities(kodi::addon::PVRCapabilities& capabilities)
@@ -414,34 +265,31 @@ PVR_ERROR CPvrClient::GetCapabilities(kodi::addon::PVRCapabilities& capabilities
 
 PVR_ERROR CPvrClient::GetBackendName(std::string& name)
 {
-  name = "Direct Tuner PVR";
+  name = m_backend->Name();
   return PVR_ERROR_NO_ERROR;
 }
 
 PVR_ERROR CPvrClient::GetBackendVersion(std::string& version)
 {
-  std::lock_guard<std::mutex> lock(m_deviceMutex);
-  version = m_device.firmware;
+  version = m_backend->Version();
   return PVR_ERROR_NO_ERROR;
 }
 
 PVR_ERROR CPvrClient::GetBackendHostname(std::string& hostname)
 {
-  std::lock_guard<std::mutex> lock(m_deviceMutex);
-  hostname = m_device.baseUrl;
+  hostname = m_backend->Hostname();
   return PVR_ERROR_NO_ERROR;
 }
 
 PVR_ERROR CPvrClient::GetConnectionString(std::string& connection)
 {
-  std::lock_guard<std::mutex> lock(m_deviceMutex);
-  connection = m_connected ? m_device.friendlyName + " " + m_device.baseUrl : "Not connected";
+  connection = m_backend->ConnectionText();
   return PVR_ERROR_NO_ERROR;
 }
 
 PVR_ERROR CPvrClient::GetDriveSpace(uint64_t& total, uint64_t& used)
 {
-  if (!m_store.DriveSpace(total, used))
+  if (!m_backend->DriveSpace(total, used))
     return PVR_ERROR_SERVER_ERROR;
   total /= 1024;
   used /= 1024;
@@ -450,16 +298,13 @@ PVR_ERROR CPvrClient::GetDriveSpace(uint64_t& total, uint64_t& used)
 
 PVR_ERROR CPvrClient::OnSystemWake()
 {
-  std::lock_guard<std::mutex> lock(m_serviceMutex);
-  m_refreshNow = true;
-  m_serviceWake.notify_all();
+  m_backend->Refresh();
   return PVR_ERROR_NO_ERROR;
 }
 
 PVR_ERROR CPvrClient::GetChannelsAmount(int& amount)
 {
-  std::lock_guard<std::mutex> lock(m_deviceMutex);
-  amount = static_cast<int>(m_channels.size());
+  amount = static_cast<int>(m_backend->Channels().size());
   return PVR_ERROR_NO_ERROR;
 }
 
@@ -468,16 +313,16 @@ PVR_ERROR CPvrClient::GetChannels(bool radio, kodi::addon::PVRChannelsResultSet&
   if (radio)
     return PVR_ERROR_NO_ERROR;
 
-  std::lock_guard<std::mutex> lock(m_deviceMutex);
-  for (const dt::Channel& channel : m_channels)
+  const std::map<int, std::string> icons = m_backend->ChannelIcons();
+  for (const dt::Channel& channel : m_backend->Channels())
   {
     kodi::addon::PVRChannel item;
     item.SetUniqueId(static_cast<unsigned int>(channel.uid));
     item.SetChannelNumber(static_cast<unsigned int>(channel.major));
     item.SetSubChannelNumber(static_cast<unsigned int>(channel.minor));
     item.SetChannelName(channel.name);
-    const auto icon = m_icons.find(channel.uid);
-    if (icon != m_icons.end())
+    const auto icon = icons.find(channel.uid);
+    if (icon != icons.end())
       item.SetIconPath(icon->second);
     results.Add(item);
   }
@@ -486,41 +331,24 @@ PVR_ERROR CPvrClient::GetChannels(bool radio, kodi::addon::PVRChannelsResultSet&
 
 PVR_ERROR CPvrClient::GetSignalStatus(int channelUid, kodi::addon::PVRSignalStatus& status)
 {
-  dt::DeviceInfo device;
+  dt::SignalInfo signal;
+  if (!m_backend->Signal(channelUid, signal))
+    return PVR_ERROR_NO_ERROR;
+
   dt::Channel channel;
-  {
-    std::lock_guard<std::mutex> lock(m_deviceMutex);
-    device = m_device;
-  }
-  status.SetAdapterName(device.friendlyName);
-  if (!LookupChannel(channelUid, channel))
-    return PVR_ERROR_NO_ERROR;
-
-  std::vector<dt::TunerUse> tuners;
-  if (!dt::FetchTunerStatus(device, tuners))
-  {
-    status.SetAdapterStatus("Can't read tuner status");
-    return PVR_ERROR_NO_ERROR;
-  }
-
-  for (const dt::TunerUse& tuner : tuners)
-  {
-    if (tuner.channel == channel.guideNumber)
-    {
-      status.SetAdapterStatus(tuner.resource);
-      status.SetServiceName(channel.name);
-      status.SetSignal(tuner.signalStrength * 65535 / 100);
-      status.SetSNR(tuner.signalQuality * 65535 / 100);
-      break;
-    }
-  }
+  status.SetAdapterName(signal.adapter);
+  status.SetAdapterStatus(signal.status);
+  if (m_backend->LookupChannel(channelUid, channel))
+    status.SetServiceName(channel.name);
+  status.SetSignal(signal.strength * 65535 / 100);
+  status.SetSNR(signal.quality * 65535 / 100);
   return PVR_ERROR_NO_ERROR;
 }
 
 PVR_ERROR CPvrClient::GetEPGForChannel(int channelUid, time_t start, time_t end,
                                        kodi::addon::PVREPGTagsResultSet& results)
 {
-  for (const dt::GuideEvent& event : m_guide.GetEvents(channelUid, start, end))
+  for (const dt::GuideEvent& event : m_backend->GetEvents(channelUid, start, end))
   {
     kodi::addon::PVREPGTag tag;
     tag.SetUniqueBroadcastId(event.Uid());
@@ -554,7 +382,7 @@ PVR_ERROR CPvrClient::GetEPGForChannel(int channelUid, time_t start, time_t end,
 
 PVR_ERROR CPvrClient::GetRecordingsAmount(bool deleted, int& amount)
 {
-  amount = deleted ? 0 : static_cast<int>(m_store.List().size());
+  amount = deleted ? 0 : static_cast<int>(m_backend->GetRecordings().size());
   return PVR_ERROR_NO_ERROR;
 }
 
@@ -563,7 +391,7 @@ PVR_ERROR CPvrClient::GetRecordings(bool deleted, kodi::addon::PVRRecordingsResu
   if (deleted)
     return PVR_ERROR_NO_ERROR;
 
-  for (const dt::RecordingInfo& info : m_store.List())
+  for (const dt::RecordingInfo& info : m_backend->GetRecordings())
   {
     kodi::addon::PVRRecording item;
     item.SetRecordingId(info.id);
@@ -602,20 +430,18 @@ PVR_ERROR CPvrClient::GetRecordings(bool deleted, kodi::addon::PVRRecordingsResu
 
 PVR_ERROR CPvrClient::DeleteRecording(const kodi::addon::PVRRecording& recording)
 {
-  if (m_scheduler->IsRecording(recording.GetRecordingId()))
+  std::string error;
+  if (!m_backend->DeleteRecording(recording.GetRecordingId(), error))
   {
-    NotifyUser(true, "Stop the recording before deleting it");
-    return PVR_ERROR_RECORDING_RUNNING;
-  }
-  if (!m_store.Delete(recording.GetRecordingId()))
+    Notify(true, error);
     return PVR_ERROR_FAILED;
-  TriggerRecordingUpdate();
+  }
   return PVR_ERROR_NO_ERROR;
 }
 
 PVR_ERROR CPvrClient::GetRecordingSize(const kodi::addon::PVRRecording& recording, int64_t& size)
 {
-  size = std::max<int64_t>(dt::FileSize(m_store.MediaPath(recording.GetRecordingId())), 0);
+  size = m_backend->RecordingSize(recording.GetRecordingId());
   return PVR_ERROR_NO_ERROR;
 }
 
@@ -672,13 +498,13 @@ PVR_ERROR CPvrClient::GetTimerTypes(std::vector<kodi::addon::PVRTimerType>& type
 
 PVR_ERROR CPvrClient::GetTimersAmount(int& amount)
 {
-  amount = static_cast<int>(m_scheduler->GetTimers().size());
+  amount = static_cast<int>(m_backend->GetTimers().size());
   return PVR_ERROR_NO_ERROR;
 }
 
 PVR_ERROR CPvrClient::GetTimers(kodi::addon::PVRTimersResultSet& results)
 {
-  for (const dt::Timer& timer : m_scheduler->GetTimers())
+  for (const dt::Timer& timer : m_backend->GetTimers())
   {
     kodi::addon::PVRTimer item;
     item.SetClientIndex(timer.id);
@@ -768,7 +594,7 @@ dt::Timer CPvrClient::FromKodi(const kodi::addon::PVRTimer& source)
     timer.search = timer.title;
 
   if (timer.epgUid != PVR_TIMER_NO_EPG_UID && timer.channelUid != 0)
-    m_guide.FindEvent(timer.channelUid, timer.epgUid, timer.event);
+    m_backend->FindEvent(timer.channelUid, timer.epgUid, timer.event);
   return timer;
 }
 
@@ -783,9 +609,9 @@ PVR_ERROR CPvrClient::AddTimer(const kodi::addon::PVRTimer& source)
     timer.marginAfter = kodi::addon::GetSettingInt("margin_after", 3);
 
   std::string error;
-  if (m_scheduler->AddTimer(std::move(timer), &error) == 0)
+  if (m_backend->AddTimer(std::move(timer), error) == 0)
   {
-    NotifyUser(true, error);
+    Notify(true, error);
     return PVR_ERROR_REJECTED;
   }
   return PVR_ERROR_NO_ERROR;
@@ -793,65 +619,59 @@ PVR_ERROR CPvrClient::AddTimer(const kodi::addon::PVRTimer& source)
 
 PVR_ERROR CPvrClient::DeleteTimer(const kodi::addon::PVRTimer& timer, bool)
 {
-  return m_scheduler->DeleteTimer(timer.GetClientIndex()) ? PVR_ERROR_NO_ERROR : PVR_ERROR_INVALID_PARAMETERS;
+  return m_backend->DeleteTimer(timer.GetClientIndex()) ? PVR_ERROR_NO_ERROR : PVR_ERROR_INVALID_PARAMETERS;
 }
 
 PVR_ERROR CPvrClient::UpdateTimer(const kodi::addon::PVRTimer& source)
 {
-  return m_scheduler->UpdateTimer(FromKodi(source)) ? PVR_ERROR_NO_ERROR : PVR_ERROR_INVALID_PARAMETERS;
+  return m_backend->UpdateTimer(FromKodi(source)) ? PVR_ERROR_NO_ERROR : PVR_ERROR_INVALID_PARAMETERS;
 }
 
 bool CPvrClient::OpenLiveStream(const kodi::addon::PVRChannel& channel)
 {
   CloseLiveStream();
-
-  dt::Channel tuned;
-  if (!LookupChannel(static_cast<int>(channel.GetUniqueId()), tuned))
-    return false;
+  const int uid = static_cast<int>(channel.GetUniqueId());
 
   // Live TV always plays from the ring, which needs somewhere to live even when the
   // user doesn't want timeshift. It stays small then.
   const int64_t capacity = std::max(m_timeshiftCapacity, MIN_TIMESHIFT_BYTES);
-  const std::string folder = dt::JoinPath(m_store.Folder(), ".timeshift");
-  dt::CreateDirectories(folder);
+  dt::CreateDirectories(m_timeshiftFolder);
 
-  auto buffer = std::make_shared<dt::TimeshiftBuffer>(dt::JoinPath(folder, "live.ts"), capacity);
+  auto buffer = std::make_shared<dt::TimeshiftBuffer>(dt::JoinPath(m_timeshiftFolder, "live.ts"), capacity);
   if (!buffer->Open())
   {
-    NotifyUser(true, "Can't write the live TV buffer in the recordings folder");
+    Notify(true, "Can't write the live TV buffer in " + m_timeshiftFolder);
     return false;
   }
 
-  dt::TuneResult result = dt::TuneResult::Ok;
-  auto lease = m_pool.Acquire(tuned, dt::TunerUseKind::Live, result);
-  if (!lease)
+  std::string error;
+  auto handle = m_backend->OpenLive(uid, buffer, error);
+  if (!handle)
   {
-    NotifyUser(true, tuned.guideNumber + " " + tuned.name + ": " + dt::TuneResultText(result));
+    Notify(true, error);
     return false;
   }
-  lease->Pump().AddSink(buffer);
 
   std::lock_guard<std::mutex> lock(m_liveMutex);
-  m_liveLease = std::move(lease);
+  m_liveHandle = std::move(handle);
   m_live = std::move(buffer);
-  m_liveChannel = tuned.uid;
+  m_liveChannel = uid;
   return true;
 }
 
 void CPvrClient::CloseLiveStream()
 {
-  std::unique_ptr<dt::TunerLease> lease;
+  std::unique_ptr<dt::LiveHandle> handle;
   std::shared_ptr<dt::TimeshiftBuffer> buffer;
   {
     std::lock_guard<std::mutex> lock(m_liveMutex);
-    lease = std::move(m_liveLease);
+    handle = std::move(m_liveHandle);
     buffer = std::move(m_live);
     m_liveChannel = 0;
   }
   if (buffer)
     buffer->Interrupt();
-  if (lease && buffer)
-    lease->Pump().RemoveSink(buffer);
+  handle.reset();
 }
 
 int CPvrClient::ReadLiveStream(unsigned char* buffer, unsigned int size)
@@ -867,7 +687,7 @@ int CPvrClient::ReadLiveStream(unsigned char* buffer, unsigned int size)
   const int count = live->Read(buffer, size, LIVE_READ_TIMEOUT_MS);
   if (count == 0)
   {
-    NotifyUser(true, "No data from the tuner");
+    Notify(true, "No data from the tuner");
     return -1;
   }
   return count;
@@ -938,62 +758,64 @@ PVR_ERROR CPvrClient::GetStreamReadChunkSize(int& chunkSize)
 bool CPvrClient::OpenRecordedStream(const kodi::addon::PVRRecording& recording)
 {
   CloseRecordedStream();
+  auto reader = m_backend->OpenRecording(recording.GetRecordingId());
+  if (!reader)
+  {
+    Notify(true, "Can't open the recording file");
+    return false;
+  }
   std::lock_guard<std::mutex> lock(m_playMutex);
-  m_playFile = dt::OpenFileShared(m_store.MediaPath(recording.GetRecordingId()), "rb");
-  m_playId = recording.GetRecordingId();
-  if (!m_playFile)
-    NotifyUser(true, "Can't open the recording file");
-  return m_playFile != nullptr;
+  m_play = std::move(reader);
+  return true;
 }
 
 void CPvrClient::CloseRecordedStream()
 {
   std::lock_guard<std::mutex> lock(m_playMutex);
-  if (m_playFile)
-    std::fclose(m_playFile);
-  m_playFile = nullptr;
-  m_playId.clear();
+  m_play.reset();
 }
 
 int CPvrClient::ReadRecordedStream(unsigned char* buffer, unsigned int size)
 {
-  // A recording in progress keeps growing, so reaching its end means waiting.
-  for (int attempt = 0; attempt < 100; ++attempt)
-  {
-    {
-      std::lock_guard<std::mutex> lock(m_playMutex);
-      if (!m_playFile)
-        return -1;
-      const size_t count = std::fread(buffer, 1, size, m_playFile);
-      if (count > 0)
-        return static_cast<int>(count);
-      std::clearerr(m_playFile);
-      if (!m_scheduler->IsRecording(m_playId))
-        return 0;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  }
-  return 0;
+  std::lock_guard<std::mutex> lock(m_playMutex);
+  return m_play ? m_play->Read(buffer, size) : -1;
 }
 
 int64_t CPvrClient::SeekRecordedStream(int64_t position, int whence)
 {
   std::lock_guard<std::mutex> lock(m_playMutex);
-  if (!m_playFile || dt::SeekFile(m_playFile, position, whence) != 0)
-    return -1;
-  return dt::TellFile(m_playFile);
+  return m_play ? m_play->Seek(position, whence) : -1;
 }
 
 int64_t CPvrClient::LengthRecordedStream()
 {
   std::lock_guard<std::mutex> lock(m_playMutex);
-  return m_playId.empty() ? -1 : dt::FileSize(m_store.MediaPath(m_playId));
+  return m_play ? m_play->Length() : -1;
 }
 
-void CPvrClient::NotifyUser(bool isError, const std::string& text)
+void CPvrClient::Notify(bool isError, const std::string& text)
 {
   kodi::Log(isError ? ADDON_LOG_ERROR : ADDON_LOG_INFO, "%s", text.c_str());
   kodi::QueueNotification(isError ? QUEUE_ERROR : QUEUE_INFO, "Direct Tuner PVR", text);
+}
+
+void CPvrClient::ConnectionChanged(bool connected, const std::string& text)
+{
+  if (connected)
+    ConnectionStateChange(text, PVR_CONNECTION_STATE_CONNECTED, "");
+  else
+    ConnectionStateChange(text, PVR_CONNECTION_STATE_SERVER_UNREACHABLE, text);
+}
+
+void CPvrClient::ChannelsChanged()
+{
+  TriggerChannelUpdate();
+}
+
+void CPvrClient::GuideChanged()
+{
+  for (const dt::Channel& channel : m_backend->Channels())
+    TriggerEpgUpdate(static_cast<unsigned int>(channel.uid));
 }
 
 void CPvrClient::TimersChanged()
@@ -1006,16 +828,13 @@ void CPvrClient::RecordingsChanged()
   TriggerRecordingUpdate();
 }
 
-bool CPvrClient::LookupChannel(int uid, dt::Channel& out)
+void CPvrClient::LiveStopped(int channelUid, const std::string& reason)
 {
-  std::lock_guard<std::mutex> lock(m_deviceMutex);
-  for (const dt::Channel& channel : m_channels)
   {
-    if (channel.uid == uid)
-    {
-      out = channel;
-      return true;
-    }
+    std::lock_guard<std::mutex> lock(m_liveMutex);
+    if (!m_live || m_liveChannel != channelUid)
+      return;
+    m_live->MarkEnded();
   }
-  return false;
+  Notify(true, reason);
 }

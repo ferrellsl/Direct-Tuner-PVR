@@ -93,6 +93,39 @@ std::string Trim(const std::string& text)
   return text.substr(first, last - first);
 }
 
+std::string UrlEncode(const std::string& text)
+{
+  std::string out;
+  for (const char c : text)
+  {
+    const auto byte = static_cast<unsigned char>(c);
+    if (std::isalnum(byte) || c == '-' || c == '_' || c == '.' || c == '~')
+      out.push_back(c);
+    else
+      out += Format("%%%02X", byte);
+  }
+  return out;
+}
+
+std::string UrlDecode(const std::string& text)
+{
+  std::string out;
+  for (size_t i = 0; i < text.size(); ++i)
+  {
+    if (text[i] == '%' && i + 2 < text.size() && std::isxdigit(static_cast<unsigned char>(text[i + 1])) &&
+        std::isxdigit(static_cast<unsigned char>(text[i + 2])))
+    {
+      out.push_back(static_cast<char>(std::stoi(text.substr(i + 1, 2), nullptr, 16)));
+      i += 2;
+    }
+    else
+    {
+      out.push_back(text[i] == '+' ? ' ' : text[i]);
+    }
+  }
+  return out;
+}
+
 #ifdef _WIN32
 namespace
 {

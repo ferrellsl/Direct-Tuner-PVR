@@ -14,7 +14,7 @@ msgid "General"
 msgstr ""
 
 msgctxt "#30001"
-msgid "Recording (runs only while Kodi is open)"
+msgid "Recording on this computer"
 msgstr ""
 
 msgctxt "#30002"
@@ -51,6 +51,38 @@ msgstr ""
 
 msgctxt "#30010"
 msgid "Tuner IP address (only if it isn't found)"
+msgstr ""
+
+msgctxt "#30011"
+msgid "Recording service"
+msgstr ""
+
+msgctxt "#30012"
+msgid "Direct Tuner Recorder"
+msgstr ""
+
+msgctxt "#30013"
+msgid "Use one if found on the network"
+msgstr ""
+
+msgctxt "#30014"
+msgid "Don't use one"
+msgstr ""
+
+msgctxt "#30015"
+msgid "Use this address"
+msgstr ""
+
+msgctxt "#30016"
+msgid "Recorder address"
+msgstr ""
+
+msgctxt "#30112"
+msgid "Direct Tuner Recorder is a separate program for an always-on computer. It records even when Kodi is closed, and every Kodi in the house shares its timers, recordings and tuners. Without it, recordings run only while this Kodi is open and the settings below apply."
+msgstr ""
+
+msgctxt "#30116"
+msgid "The computer running Direct Tuner Recorder, such as 192.168.1.20 or 192.168.1.20:8866. Only needed if it isn't found automatically."
 msgstr ""
 
 msgctxt "#30102"

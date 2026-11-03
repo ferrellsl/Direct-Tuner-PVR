@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(pvr.directtuner LANGUAGES CXX VERSION 21.1.0)
+project(pvr.directtuner LANGUAGES CXX VERSION 21.2.0)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,6 +12,7 @@ if(NOT EXISTS "${KODI_INCLUDE_DIR}/kodi/AddonBase.h")
 endif()
 
 add_library(directtuner_core STATIC
+  src/core/Backend.cpp
   src/core/Common.cpp
   src/core/Device.cpp
   src/core/Guide.cpp
@@ -19,7 +20,9 @@ add_library(directtuner_core STATIC
   src/core/Net.cpp
   src/core/Pump.cpp
   src/core/RecordingStore.cpp
-  src/core/Scheduler.cpp)
+  src/core/RemoteBackend.cpp
+  src/core/Scheduler.cpp
+  src/core/Wire.cpp)
 set_target_properties(directtuner_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 if(WIN32)
@@ -51,6 +54,27 @@ target_link_libraries(directtuner_tests PRIVATE directtuner_core)
 
 add_executable(directtuner_tool tests/TunerTool.cpp)
 target_link_libraries(directtuner_tool PRIVATE directtuner_core)
+
+# Direct Tuner Recorder, the service. Desktop systems only; its source is published separately.
+if(NOT ANDROID AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/service)
+  get_target_property(CORE_SOURCES directtuner_core SOURCES)
+  add_executable(DirectTunerRecorder
+    ${CORE_SOURCES}
+    src/service/Fetch.cpp
+    src/service/HttpServer.cpp
+    src/service/Main.cpp
+    src/service/Recorder.cpp)
+  if(WIN32)
+    target_compile_definitions(DirectTunerRecorder PRIVATE
+      TARGET_WINDOWS NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS _WINSOCK_DEPRECATED_NO_WARNINGS)
+    target_link_libraries(DirectTunerRecorder PRIVATE ws2_32 iphlpapi winhttp advapi32)
+    # One file to install: the C++ runtime goes inside the program.
+    set_target_properties(DirectTunerRecorder PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded")
+  else()
+    target_compile_definitions(DirectTunerRecorder PRIVATE _FILE_OFFSET_BITS=64)
+    target_link_libraries(DirectTunerRecorder PRIVATE Threads::Threads)
+  endif()
+endif()
 
 set(ADDON_VERSION ${PROJECT_VERSION})
 if(WIN32)
