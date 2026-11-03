@@ -25,6 +25,10 @@ missed.
 Standard Kodi can't decode AC-4 audio. If you want sound on ATSC 3.0 channels, install the
 [AC-4 build](https://github.com/ferrellsl/kodi-ac4/releases) first.
 
+The AC-4 build's Windows installer, from v21.3-ac4.5 on, already includes this add-on, turned off. If you
+use it, skip steps 1 to 3 below and enable the add-on under **Add-ons > My add-ons > PVR clients > Direct
+Tuner PVR**. Then see step 4 if you use another PVR add-on.
+
 ## Install
 
 ### 1. Download the add-on
