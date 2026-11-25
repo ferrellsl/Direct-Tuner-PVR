@@ -159,6 +159,13 @@ add-on matches channels by the number in a channel's display name. ATSC 3.0 chan
 also match that number minus 100, so 103.1 uses the listings for 3.1. The add-on rereads the file when
 it changes.
 
+**To make an XMLTV file,** try [OneGuide](https://github.com/ferrellsl/OneGuide), a free program made
+for this add-on. It combines 5 or more days of Gracenote listings, with descriptions, cast and images,
+with your tuner's own guide for the channels Gracenote misses, such as low-power stations and ATSC 3.0.
+Run it once a day and choose its `xmltv.xml` in the settings. OneGuide 1.1 adds `--signal`, which tests
+each station on every run and leaves out the ones your antenna can't reliably receive. Those stations
+then have no XMLTV listings; the add-on still lists them, using the built-in guide.
+
 ![The TV guide](docs/images/10-guide.png)
 
 ## Recording
